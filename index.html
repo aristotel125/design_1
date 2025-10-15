@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дизайнер презентаций</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Roboto:wght@400;700&family=Playfair+Display:wght@400;700&family=Montserrat:wght@400;700&family=Open+Sans:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        .draggable-el { position: absolute; cursor: move; border: 2px dashed transparent; user-select: none; }
+        .draggable-el:hover { border-color: #3b82f6; }
+        .draggable-el.selected { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3); }
+        .resize-handle { position: absolute; width: 10px; height: 10px; background: #3b82f6; border: 2px solid white; border-radius: 50%; z-index: 10; }
+        .resize-handle.se { bottom: -5px; right: -5px; cursor: se-resize; }
+        .rotate-handle { position: absolute; top: -30px; left: 50%; transform: translateX(-50%); width: 20px; height: 20px; background: #10b981; border: 2px solid white; border-radius: 50%; cursor: grab; z-index: 10; }
+        .slide-table { border-collapse: collapse; }
+        .slide-table td { border: 1px solid rgba(255,255,255,0.3); padding: 8px; min-width: 80px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- React -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- html2canvas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        const Storage = {
+            saveProject: (projectName, data) => {
+                const key = `presentation_${projectName}`;
+                const lightData = { ...data, slides: data.slides.map(s => ({ ...s, bgImage: null, images: [] })), lastModified: new Date().toISOString() };
+                try { localStorage.setItem(key, JSON.stringify(lightData)); return true; } catch (e) { return false; }
+            },
+            loadProject: (projectName) => { const data = localStorage.getItem(`presentation_${projectName}`); return data ? JSON.parse(data) : null; },
+            deleteProject: (projectName) => { localStorage.removeItem(`presentation_${projectName}`); },
+            getAllProjects: () => {
+                const projects = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && key.startsWith('presentation_')) {
+                        try {
+                            const data = JSON.parse(localStorage.getItem(key));
+                            projects.push({ name: key.replace('presentation_', ''), lastModified: data.lastModified, slideCount: data.slides?.length || 0 });
+                        } catch (e) {}
+                    }
+                }
+                return projects.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+            },
+            exportToFile: (projectName, data) => {
+                const blob = new Blob([JSON.stringify({ projectName, exportDate: new Date().toISOString(), ...data }, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                const date = new Date();
+                link.download = `${projectName}_${date.getDate()}.${date.getMonth() + 1}.json`;
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            },
+            importFromFile: (file, callback) => {
+                const reader = new FileReader();
+                reader.onload = (e) => { try { callback(JSON.parse(e.target.result)); } catch (error) { alert('Ошибка при чтении файла'); } };
+                reader.readAsText(file);
+            }
+        };
+
+        const PresentationDesigner = () => {
+            const [mode, setMode] = useState('dashboard');
+            const [slides, setSlides] = useState([]);
+            const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+            const [changedSettings, setChangedSettings] = useState({});
+            const [isStyleSectionOpen, setIsStyleSectionOpen] = useState(false);
+            const [aspectRatio, setAspectRatio] = useState('16:9');
+            const [selectedElement, setSelectedElement] = useState(null);
+            const [projects, setProjects] = useState([]);
+            const [projectName, setProjectName] = useState('');
+            const [tempProjectName, setTempProjectName] = useState('');
+            const [deleteConfirm, setDeleteConfirm] = useState(null);
+            const [showTableSelector, setShowTableSelector] = useState(false);
+            const [tableRows, setTableRows] = useState(3);
+            const [tableCols, setTableCols] = useState(3);
+            const [bgPreview, setBgPreview] = useState(null);
+            const [showBgPreview, setShowBgPreview] = useState(false);
+            const [draggedTable, setDraggedTable] = useState(null);
+            
+            const slideRef = useRef(null);
+            const importTextRef = useRef(null);
+            const fileInputRef = useRef(null);
+            const imageInputRef = useRef(null);
+            const autoSaveTimerRef = useRef(null);
+
+            useEffect(() => {
+                setIsStyleSectionOpen(currentSlideIndex < 2);
+            }, [mode, currentSlideIndex]);
+
+            useEffect(() => { if (mode === 'dashboard') setProjects(Storage.getAllProjects()); }, [mode]);
+
+            useEffect(() => {
+                if (mode === 'edit' && projectName && slides.length > 0) {
+                    if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current);
+                    autoSaveTimerRef.current = setInterval(() => { Storage.saveProject(projectName, { slides, aspectRatio }); console.log('✅ Автосохранение'); }, 60000);
+                    return () => { if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current); };
+                }
+            }, [mode, projectName, slides, aspectRatio]);
+
+            const fonts = [
+                { name: 'Inter', value: 'Inter, sans-serif' },
+                { name: 'Roboto', value: 'Roboto, sans-serif' },
+                { name: 'Playfair Display', value: 'Playfair Display, serif' },
+                { name: 'Montserrat', value: 'Montserrat, sans-serif' },
+                { name: 'Open Sans', value: 'Open Sans, sans-serif' }
+            ];
+
+            const markSettingChanged = (settingName) => {
+                setChangedSettings(prev => ({
+                    ...prev,
+                    [settingName]: true
+                }));
+            };
+
+            const clearSettingChange = (settingName) => {
+                setChangedSettings(prev => {
+                    const newState = { ...prev };
+                    delete newState[settingName];
+                    return newState;
+                });
+            };
+
+            const applyToCurrentSlide = (settings) => {
+                const updatedSlides = [...slides];
+                updatedSlides[currentSlideIndex] = {
+                    ...updatedSlides[currentSlideIndex],
+                    ...settings
+                };
+                setSlides(updatedSlides);
+            };
+
+            const applyToCurrentAndFollowing = (settings) => {
+                const updatedSlides = slides.map((slide, index) => {
+                    if (index >= currentSlideIndex) {
+                        return { ...slide, ...settings };
+                    }
+                    return slide;
+                });
+                setSlides(updatedSlides);
+            };
+
+            const parseSlides = (text) => {
+                const slidePattern = /^(\d+)\s*$/gm;
+                const parts = text.split(slidePattern).filter(part => part.trim() !== '');
+                
+                const parsedSlides = [];
+                
+                for (let i = 0; i < parts.length; i += 2) {
+                    if (i + 1 < parts.length) {
+                        const content = parts[i].trim();
+                        const slideNumber = parts[i + 1];
+                        
+                        const lines = content.split('\n').filter(line => line.trim() !== '');
+                        
+                        let title = '';
+                        let mainText = '';
+                        let accentText = '';
+                        let secondaryText = '';
+                        
+                        if (lines.length > 0) {
+                            title = lines[0];
+                            
+                            let accentIndex = -1;
+                            for (let j = 1; j < lines.length; j++) {
+                                if (lines[j].trim().endsWith(':')) {
+                                    accentText = lines[j];
+                                    accentIndex = j;
+                                    break;
+                                }
+                            }
+                            
+                            if (accentIndex > 0) {
+                                mainText = lines.slice(1, accentIndex).join('\n');
+                                if (accentIndex < lines.length - 1) {
+                                    secondaryText = lines.slice(accentIndex + 1).join('\n');
+                                }
+                            } else {
+                                mainText = lines.slice(1).join('\n');
+                            }
+                        }
+                        
+                        parsedSlides.push({
+                            id: slideNumber,
+                            title: title,
+                            mainText: mainText,
+                            accentText: accentText,
+                            secondaryText: secondaryText,
+                            titleAlign: 'left',
+                            mainTextAlign: 'left',
+                            accentAlign: 'left',
+                            secondaryTextAlign: 'left',
+                            bgType: 'solid',
+                            bgColor1: '#1e40af',
+                            bgColor2: '#7c3aed',
+                            bgImage: null,
+                            fontFamily: 'Inter',
+                            titleFontSize: 130,
+                            mainFontSize: 75,
+                            accentFontSize: 70,
+                            accentBgColor: '#fbbf24',
+                            textColor: '#ffffff',
+                            accentTextColor: '#000000',
+                            images: [],
+                            tables: []
+                        });
+                    }
+                }
+                
+                return parsedSlides;
+            };
+
+            const handleImport = () => {
+                const text = importTextRef.current.value;
+                if (text.trim()) {
+                    const parsedSlides = parseSlides(text);
+                    setSlides(parsedSlides);
+                    setMode('edit');
+                    setCurrentSlideIndex(0);
+                    if (projectName) Storage.saveProject(projectName, { slides: parsedSlides, aspectRatio });
+                }
+            };
+
+            const createNewProject = () => { if (tempProjectName.trim()) { setProjectName(tempProjectName); setMode('import'); } else alert('Введите название проекта'); };
+            const loadProject = (name) => { const data = Storage.loadProject(name); if (data) { setProjectName(name); setSlides(data.slides || []); setAspectRatio(data.aspectRatio || '16:9'); setMode('edit'); setCurrentSlideIndex(0); } };
+            const deleteProject = (name) => { if (deleteConfirm === name) { Storage.deleteProject(name); setProjects(Storage.getAllProjects()); setDeleteConfirm(null); } else { setDeleteConfirm(name); setTimeout(() => setDeleteConfirm(null), 3000); } };
+            const handleFileImport = (e) => { const file = e.target.files[0]; if (file) Storage.importFromFile(file, (data) => { setProjectName(data.projectName || 'Импортированный проект'); setSlides(data.slides || []); setAspectRatio(data.aspectRatio || '16:9'); setMode('edit'); setCurrentSlideIndex(0); }); };
+            const exportProject = () => { Storage.exportToFile(projectName, { slides, aspectRatio }); };
+
+            const addSlide = () => {
+                const newSlide = { id: String(slides.length + 1), title: '', mainText: '', accentText: '', secondaryText: '', titleAlign: 'left', mainTextAlign: 'left', accentAlign: 'left', secondaryTextAlign: 'left', bgType: currentSlideIndex >= 0 ? slides[currentSlideIndex].bgType : 'solid', bgColor1: currentSlideIndex >= 0 ? slides[currentSlideIndex].bgColor1 : '#1e40af', bgColor2: currentSlideIndex >= 0 ? slides[currentSlideIndex].bgColor2 : '#7c3aed', bgImage: null, fontFamily: currentSlideIndex >= 0 ? slides[currentSlideIndex].fontFamily : 'Inter', titleFontSize: currentSlideIndex >= 0 ? slides[currentSlideIndex].titleFontSize : 130, mainFontSize: currentSlideIndex >= 0 ? slides[currentSlideIndex].mainFontSize : 75, accentFontSize: currentSlideIndex >= 0 ? slides[currentSlideIndex].accentFontSize : 70, accentBgColor: currentSlideIndex >= 0 ? slides[currentSlideIndex].accentBgColor : '#fbbf24', textColor: currentSlideIndex >= 0 ? slides[currentSlideIndex].textColor : '#ffffff', accentTextColor: currentSlideIndex >= 0 ? slides[currentSlideIndex].accentTextColor : '#000000', images: [], tables: [] };
+                const updatedSlides = [...slides]; updatedSlides.splice(currentSlideIndex + 1, 0, newSlide); updatedSlides.forEach((s, i) => s.id = String(i + 1)); setSlides(updatedSlides); setCurrentSlideIndex(currentSlideIndex + 1); if (projectName) Storage.saveProject(projectName, { slides: updatedSlides, aspectRatio });
+            };
+
+            const deleteSlide = () => { if (slides.length <= 1) { alert('Нельзя удалить последний слайд'); return; } if (window.confirm('Вы уверены, что хотите удалить этот слайд?')) { const updatedSlides = slides.filter((_, i) => i !== currentSlideIndex); updatedSlides.forEach((s, i) => s.id = String(i + 1)); setSlides(updatedSlides); setCurrentSlideIndex(Math.max(0, currentSlideIndex - 1)); if (projectName) Storage.saveProject(projectName, { slides: updatedSlides, aspectRatio }); } };
+
+            const handleSlideImageUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (event) => { const newImage = { id: Date.now(), src: event.target.result, x: 10, y: 10, width: 30, height: 30, rotation: 0 }; const updatedSlides = [...slides]; if (!updatedSlides[currentSlideIndex].images) updatedSlides[currentSlideIndex].images = []; updatedSlides[currentSlideIndex].images.push(newImage); setSlides(updatedSlides); }; reader.readAsDataURL(file); } };
+
+            const handleImageDragStart = (e, img) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('imageId', img.id); };
+
+            const handleImageDrag = (e, img) => { 
+                if (e.buttons !== 1) return;
+                e.preventDefault();
+                const slideRect = slideRef.current?.getBoundingClientRect();
+                if (!slideRect) return;
+                
+                const x = ((e.clientX - slideRect.left) / slideRect.width) * 100;
+                const y = ((e.clientY - slideRect.top) / slideRect.height) * 100;
+                
+                const updatedSlides = [...slides];
+                const images = updatedSlides[currentSlideIndex].images || [];
+                const idx = images.findIndex(i => i.id === img.id);
+                
+                if (idx !== -1) {
+                    images[idx].x = Math.max(0, Math.min(100 - images[idx].width, x));
+                    images[idx].y = Math.max(0, Math.min(100 - images[idx].height, y));
+                    setSlides(updatedSlides);
+                }
+            };
+
+            const updateElementProperty = (elementId, property, value) => { const updatedSlides = [...slides]; const images = updatedSlides[currentSlideIndex].images || []; const idx = images.findIndex(img => img.id === elementId); if (idx !== -1) { images[idx][property] = value; setSlides(updatedSlides); } };
+
+            const deleteSelectedElement = () => { if (selectedElement) { const updatedSlides = [...slides]; updatedSlides[currentSlideIndex].images = (updatedSlides[currentSlideIndex].images || []).filter(img => img.id !== selectedElement); setSlides(updatedSlides); setSelectedElement(null); } };
+
+            const addTable = () => { setShowTableSelector(true); };
+
+            const createTable = () => {
+                const newTable = { id: Date.now(), rows: tableRows, cols: tableCols, data: Array(tableRows).fill(null).map(() => Array(tableCols).fill('')), x: 20, y: 30, cellWidth: 100 / tableCols, cellHeight: 8 };
+                const updatedSlides = [...slides]; 
+                if (!updatedSlides[currentSlideIndex].tables) updatedSlides[currentSlideIndex].tables = []; 
+                updatedSlides[currentSlideIndex].tables.push(newTable); 
+                setSlides(updatedSlides);
+                setShowTableSelector(false);
+                setTableRows(3);
+                setTableCols(3);
+            };
+
+            const handleTableDrag = (e, table) => {
+                if (e.buttons !== 1 || !draggedTable) return;
+                e.preventDefault();
+                const slideRect = slideRef.current?.getBoundingClientRect();
+                if (!slideRect) return;
+                
+                const x = ((e.clientX - slideRect.left) / slideRect.width) * 100;
+                const y = ((e.clientY - slideRect.top) / slideRect.height) * 100;
+                
+                const updatedSlides = [...slides];
+                const tables = updatedSlides[currentSlideIndex].tables || [];
+                const idx = tables.findIndex(t => t.id === table.id);
+                
+                if (idx !== -1) {
+                    tables[idx].x = Math.max(0, Math.min(80, x));
+                    tables[idx].y = Math.max(0, Math.min(80, y));
+                    setSlides(updatedSlides);
+                }
+            };
+
+            const updateTableCell = (tableId, row, col, value) => { const updatedSlides = [...slides]; const tables = updatedSlides[currentSlideIndex].tables || []; const idx = tables.findIndex(t => t.id === tableId); if (idx !== -1) { tables[idx].data[row][col] = value; setSlides(updatedSlides); } };
+
+            const deleteTable = (tableId) => { const updatedSlides = [...slides]; updatedSlides[currentSlideIndex].tables = (updatedSlides[currentSlideIndex].tables || []).filter(t => t.id !== tableId); setSlides(updatedSlides); };
+
+
+            const updateCurrentSlide = (field, value) => {
+                const updatedSlides = [...slides];
+                updatedSlides[currentSlideIndex] = {
+                    ...updatedSlides[currentSlideIndex],
+                    [field]: value
+                };
+                setSlides(updatedSlides);
+            };
+
+            const currentSlide = slides[currentSlideIndex] || {};
+
+            const getSlideBackground = () => {
+                const bgType = currentSlide.bgType || 'solid';
+                const bgImage = currentSlide.bgImage;
+                const bgColor1 = currentSlide.bgColor1 || '#1e40af';
+                const bgColor2 = currentSlide.bgColor2 || '#7c3aed';
+                
+                if (bgType === 'image' && bgImage) {
+                    return {
+                        backgroundImage: `url(${bgImage})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                        backgroundRepeat: 'no-repeat'
+                    };
+                } else if (bgType === 'solid') {
+                    return { backgroundColor: bgColor1 };
+                } else {
+                    return {
+                        backgroundImage: `linear-gradient(135deg, ${bgColor1} 0%, ${bgColor2} 100%)`
+                    };
+                }
+            };
+
+            const handleImageUpload = (e, applyTo) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        setBgPreview(event.target.result);
+                        setShowBgPreview(applyTo);
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const applyBackgroundImage = (applyTo) => {
+                const settings = { bgImage: bgPreview, bgType: 'image' };
+                if (applyTo === 'all') {
+                    applyToCurrentAndFollowing(settings);
+                } else {
+                    applyToCurrentSlide(settings);
+                }
+                setShowBgPreview(false);
+                setBgPreview(null);
+            };
+
+            const cancelBackgroundImage = () => {
+                setShowBgPreview(false);
+                setBgPreview(null);
+            };
+
+            const removeBackgroundImage = (applyTo) => {
+                const settings = {
+                    bgImage: null,
+                    bgType: 'solid'
+                };
+                if (applyTo === 'all') {
+                    applyToCurrentAndFollowing(settings);
+                } else {
+                    applyToCurrentSlide(settings);
+                }
+            };
+
+            const getAspectRatioClass = () => {
+                switch(aspectRatio) {
+                    case '16:9':
+                        return 'aspect-video';
+                    case '1:1':
+                        return 'aspect-square';
+                    case '4:3':
+                        return 'aspect-[4/3]';
+                    default:
+                        return 'aspect-video';
+                }
+            };
+
+            const getCanvasDimensions = () => {
+                switch(aspectRatio) {
+                    case '16:9':
+                        return { width: 1920, height: 1080 };
+                    case '1:1':
+                        return { width: 1080, height: 1080 };
+                    case '4:3':
+                        return { width: 1440, height: 1080 };
+                    default:
+                        return { width: 1920, height: 1080 };
+                }
+            };
+
+            const AlignmentToggle = ({ value, onChange }) => {
+                return (
+                    <div className="flex gap-1 bg-gray-100 p-1 rounded-md">
+                        <button
+                            onClick={() => onChange('left')}
+                            className={`px-3 py-1 rounded transition-colors ${
+                                value === 'left' 
+                                    ? 'bg-white shadow-sm text-blue-600' 
+                                    : 'hover:bg-gray-50 text-gray-600'
+                            }`}
+                            title="По левому краю"
+                        >
+                            ←
+                        </button>
+                        <button
+                            onClick={() => onChange('center')}
+                            className={`px-3 py-1 rounded transition-colors ${
+                                value === 'center' 
+                                    ? 'bg-white shadow-sm text-blue-600' 
+                                    : 'hover:bg-gray-50 text-gray-600'
+                            }`}
+                            title="По центру"
+                        >
+                            ↔
+                        </button>
+                    </div>
+                );
+            };
+
+            const FontSizeSlider = ({ label, value, onChange, min, max }) => {
+                return (
+                    <div>
+                        <div className="flex justify-between items-center mb-2">
+                            <label className="block text-sm font-medium text-gray-600">
+                                {label}
+                            </label>
+                            <span className="text-sm font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                                {value}px
+                            </span>
+                        </div>
+                        <input
+                            type="range"
+                            min={min}
+                            max={max}
+                            value={value}
+                            onChange={(e) => onChange(parseInt(e.target.value))}
+                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>{min}px</span>
+                            <span>{max}px</span>
+                        </div>
+                    </div>
+                );
+            };
+
+            const ApplyButtons = ({ onApplyCurrent, onApplyAll, settingKey, settingName }) => {
+                if (!changedSettings[settingKey]) return null;
+                
+                return (
+                    <div className="mt-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-lg border-2 border-amber-400 shadow-lg">
+                        <p className="text-sm text-gray-800 mb-3 font-semibold flex items-center gap-2">
+                            <span className="inline-block w-2 h-2 bg-amber-500 rounded-full animate-pulse"></span>
+                            Применить {settingName || 'изменения'}?
+                        </p>
+                        <div className="space-y-2">
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => {
+                                        onApplyCurrent();
+                                        clearSettingChange(settingKey);
+                                    }}
+                                    className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all text-sm font-semibold shadow-md hover:shadow-lg transform hover:scale-105"
+                                >
+                                    Только этот слайд
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        onApplyAll();
+                                        clearSettingChange(settingKey);
+                                    }}
+                                    className="flex-1 px-4 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-all text-sm font-semibold shadow-md hover:shadow-lg transform hover:scale-105"
+                                >
+                                    Этот и следующие
+                                </button>
+                            </div>
+                            <button
+                                onClick={() => clearSettingChange(settingKey)}
+                                className="w-full px-4 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium border border-gray-300"
+                            >
+                                Не применять
+                            </button>
+                        </div>
+                    </div>
+                );
+            };
+
+            const exportCurrentSlide = async () => {
+                if (!slideRef.current) return;
+                
+                try {
+                    const dimensions = getCanvasDimensions();
+                    const scale = dimensions.width / slideRef.current.offsetWidth;
+                    
+                    const canvas = await html2canvas(slideRef.current, {
+                        scale: scale,
+                        width: slideRef.current.offsetWidth,
+                        height: slideRef.current.offsetHeight,
+                        backgroundColor: null,
+                        logging: false,
+                        useCORS: true,
+                        allowTaint: true
+                    });
+                    
+                    canvas.toBlob((blob) => {
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.download = `slide-${currentSlide.id || currentSlideIndex + 1}.png`;
+                        link.href = url;
+                        link.click();
+                        URL.revokeObjectURL(url);
+                    });
+                } catch (error) {
+                    console.error('Ошибка при экспорте:', error);
+                    alert('Произошла ошибка при экспорте. Попробуйте еще раз.');
+                }
+            };
+
+            const exportAllSlides = async () => {
+                for (let i = 0; i < slides.length; i++) {
+                    setCurrentSlideIndex(i);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await exportCurrentSlide();
+                }
+            };
+
+            if (mode === 'dashboard') {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-8">
+                        <div className="max-w-6xl mx-auto">
+                            <div className="bg-white rounded-2xl shadow-2xl p-8 mb-8">
+                                <h1 className="text-4xl font-bold text-gray-800 mb-2">🎨 Дизайнер презентаций PRO</h1>
+                                <p className="text-gray-600 mb-6">Управление вашими проектами</p>
+                                <div className="flex gap-4">
+                                    <button onClick={() => setMode('nameProject')} className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white py-4 px-6 rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all font-semibold text-lg shadow-lg">
+                                        ➕ Создать новый проект
+                                    </button>
+                                    <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-gradient-to-r from-green-600 to-teal-600 text-white py-4 px-6 rounded-xl hover:from-green-700 hover:to-teal-700 transition-all font-semibold text-lg shadow-lg">
+                                        📂 Загрузить проект
+                                    </button>
+                                    <input ref={fileInputRef} type="file" accept=".json" onChange={handleFileImport} className="hidden" />
+                                </div>
+                            </div>
+                            {projects.length > 0 ? (
+                                <div className="bg-white rounded-2xl shadow-2xl p-8">
+                                    <h2 className="text-2xl font-bold text-gray-800 mb-6">Ваши проекты</h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {projects.map((project) => (
+                                            <div key={project.name} className="border-2 border-gray-200 rounded-xl p-6 hover:border-blue-500 hover:shadow-lg transition-all">
+                                                <div className="flex justify-between items-start mb-3">
+                                                    <div>
+                                                        <h3 className="text-xl font-bold text-gray-800">{project.name}</h3>
+                                                        <p className="text-sm text-gray-500">{project.slideCount} слайдов • {new Date(project.lastModified).toLocaleString('ru')}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => loadProject(project.name)} className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                                                        Открыть
+                                                    </button>
+                                                    <button onClick={() => deleteProject(project.name)} className={`px-4 py-2 rounded-lg font-medium transition-colors ${deleteConfirm === project.name ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-red-50 hover:text-red-600'}`}>
+                                                        {deleteConfirm === project.name ? 'Точно?' : '🗑️'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="bg-white rounded-2xl shadow-2xl p-12 text-center">
+                                    <div className="text-6xl mb-4">📋</div>
+                                    <h3 className="text-2xl font-bold text-gray-800 mb-2">Нет сохранённых проектов</h3>
+                                    <p className="text-gray-600">Создайте новый проект или загрузите существующий</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            if (mode === 'nameProject') {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-8 flex items-center justify-center">
+                        <div className="bg-white rounded-2xl shadow-2xl p-12 max-w-2xl w-full">
+                            <h1 className="text-3xl font-bold text-gray-800 mb-2">Название проекта</h1>
+                            <p className="text-gray-600 mb-8">Дайте имя вашей презентации</p>
+                            <input type="text" value={tempProjectName} onChange={(e) => setTempProjectName(e.target.value)} placeholder="КПТ. Модуль 1, урок 1" className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg mb-6" onKeyPress={(e) => e.key === 'Enter' && createNewProject()} />
+                            <div className="flex gap-4">
+                                <button onClick={() => setMode('dashboard')} className="px-6 py-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium">
+                                    ← Назад
+                                </button>
+                                <button onClick={createNewProject} className="flex-1 bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors font-semibold text-lg shadow-lg">
+                                    Продолжить →
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (mode === 'import') {
+                return (
+                    <div className="min-h-screen bg-gray-50 p-4">
+                        <div className="max-w-4xl mx-auto">
+                            <div className="bg-white rounded-xl shadow-lg p-8">
+                                <div className="flex justify-between items-center mb-6">
+                                    <div>
+                                        <h1 className="text-3xl font-bold text-gray-800 mb-1">📄 Импорт слайдов</h1>
+                                        <p className="text-sm text-gray-500">Проект: {projectName}</p>
+                                    </div>
+                                    <button onClick={() => setMode('dashboard')} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors">
+                                        ← К проектам
+                                    </button>
+                                </div>
+                                <p className="text-gray-600 mb-6">
+                                    Вставьте текст презентации. Каждый слайд должен заканчиваться номером.
+                                </p>
+                                
+                                <div className="mb-6">
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Текст презентации
+                                    </label>
+                                    <textarea
+                                        ref={importTextRef}
+                                        className="w-full h-96 px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+                                        placeholder="Вставьте сюда текст вашей презентации...&#10;&#10;Например:&#10;Психология личности:&#10;что она изучает;&#10;какие есть направления.&#10;1&#10;&#10;Каждый из нас уникален.&#10;Именно личность делает человека таким...&#10;2"
+                                    />
+                                </div>
+                                
+                                <button
+                                    onClick={handleImport}
+                                    className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 font-semibold text-lg shadow-md hover:shadow-lg"
+                                >
+                                    ⬆️ Импортировать слайды
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-50 p-4">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                            <div className="flex justify-between items-center mb-6">
+                                <div>
+                                    <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                                        📊 {projectName}
+                                    </h1>
+                                    <p className="text-sm text-gray-500">{slides.length} слайдов</p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={exportProject} className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium">
+                                        💾 Сохранить
+                                    </button>
+                                    <button onClick={() => { if (projectName) Storage.saveProject(projectName, { slides, aspectRatio }); setMode('dashboard'); }} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors">
+                                        ← К проектам
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div className="mb-6 bg-gray-50 p-4 rounded-lg">
+                                <div className="flex items-center justify-between mb-3">
+                                    <button
+                                        onClick={() => setCurrentSlideIndex(Math.max(0, currentSlideIndex - 1))}
+                                        disabled={currentSlideIndex === 0}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        ◀ Предыдущий
+                                    </button>
+                                    
+                                    <div className="flex gap-2">
+                                        <button onClick={addSlide} className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium">
+                                            ➕ Добавить слайд
+                                        </button>
+                                        <button onClick={deleteSlide} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors font-medium">
+                                            🗑️ Удалить слайд
+                                        </button>
+                                    </div>
+                                    
+                                    <button
+                                        onClick={() => setCurrentSlideIndex(Math.min(slides.length - 1, currentSlideIndex + 1))}
+                                        disabled={currentSlideIndex === slides.length - 1}
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        Следующий ▶
+                                    </button>
+                                </div>
+                                
+                                <div className="text-center mb-2">
+                                    <span className="text-lg font-semibold text-gray-700">
+                                        Слайд {currentSlideIndex + 1} из {slides.length}
+                                    </span>
+                                </div>
+                                
+                                <div className="flex gap-2 overflow-x-auto pb-2">
+                                    {slides.map((slide, index) => (
+                                        <button
+                                            key={index}
+                                            onClick={() => setCurrentSlideIndex(index)}
+                                            className={`flex-shrink-0 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                                index === currentSlideIndex
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-white text-gray-700 hover:bg-gray-100'
+                                            }`}
+                                        >
+                                            {index + 1}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div className="space-y-4">
+                                    {currentSlideIndex === 0 && (
+                                        <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg border border-purple-200">
+                                            <h3 className="font-semibold text-gray-700 mb-3">
+                                                Формат слайдов (для всей презентации)
+                                            </h3>
+                                            
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                        Формат слайда
+                                                    </label>
+                                                    <select
+                                                        value={aspectRatio}
+                                                        onChange={(e) => setAspectRatio(e.target.value)}
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 bg-white"
+                                                    >
+                                                        <option value="16:9">16:9 (Широкоформатный)</option>
+                                                        <option value="1:1">1:1 (Квадратный)</option>
+                                                        <option value="4:3">4:3 (Классический)</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="bg-gray-50 p-4 rounded-lg">
+                                        <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                            ✍️ Содержимое слайда {currentSlideIndex + 1}
+                                        </h3>
+                                        
+                                        <div className="space-y-3">
+                                            <div>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <label className="block text-sm font-medium text-gray-600">
+                                                        Заголовок
+                                                    </label>
+                                                    <AlignmentToggle 
+                                                        value={currentSlide.titleAlign} 
+                                                        onChange={(value) => updateCurrentSlide('titleAlign', value)} 
+                                                    />
+                                                </div>
+                                                <textarea
+                                                    value={currentSlide.title || ''}
+                                                    onChange={(e) => updateCurrentSlide('title', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                    rows="2"
+                                                    placeholder="Введите заголовок"
+                                                />
+                                            </div>
+                                            
+                                            <div>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <label className="block text-sm font-medium text-gray-600">
+                                                        Основной текст
+                                                    </label>
+                                                    <AlignmentToggle 
+                                                        value={currentSlide.mainTextAlign} 
+                                                        onChange={(value) => updateCurrentSlide('mainTextAlign', value)} 
+                                                    />
+                                                </div>
+                                                <textarea
+                                                    value={currentSlide.mainText || ''}
+                                                    onChange={(e) => updateCurrentSlide('mainText', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                    rows="4"
+                                                    placeholder="Введите основной текст"
+                                                />
+                                            </div>
+                                            
+                                            <div>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <label className="block text-sm font-medium text-gray-600">
+                                                        Акцентный текст
+                                                    </label>
+                                                    <AlignmentToggle 
+                                                        value={currentSlide.accentAlign} 
+                                                        onChange={(value) => updateCurrentSlide('accentAlign', value)} 
+                                                    />
+                                                </div>
+                                                <textarea
+                                                    value={currentSlide.accentText || ''}
+                                                    onChange={(e) => updateCurrentSlide('accentText', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                    rows="2"
+                                                    placeholder="Текст для выделения"
+                                                />
+                                            </div>
+                                            
+                                            <div>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <label className="block text-sm font-medium text-gray-600">
+                                                        Дополнительный текст
+                                                    </label>
+                                                    <AlignmentToggle 
+                                                        value={currentSlide.secondaryTextAlign} 
+                                                        onChange={(value) => updateCurrentSlide('secondaryTextAlign', value)} 
+                                                    />
+                                                </div>
+                                                <textarea
+                                                    value={currentSlide.secondaryText || ''}
+                                                    onChange={(e) => updateCurrentSlide('secondaryText', e.target.value)}
+                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                    rows="4"
+                                                    placeholder="Текст после акцента"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-4 rounded-lg border border-green-100">
+                                        <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                            🖼️ Изображения и таблицы
+                                        </h3>
+                                        <div className="space-y-3">
+                                            <button onClick={() => imageInputRef.current?.click()} className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                                                ➕ Добавить изображение
+                                            </button>
+                                            <input ref={imageInputRef} type="file" accept="image/*" onChange={handleSlideImageUpload} className="hidden" />
+                                            
+                                            <button onClick={addTable} className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-colors font-medium">
+                                                ➕ Добавить таблицу
+                                            </button>
+                                            
+                                            {selectedElement && (
+                                                <div className="bg-white p-3 rounded-lg border border-green-300">
+                                                    <p className="text-sm font-semibold text-gray-700 mb-2">Выбранный элемент</p>
+                                                    <div className="space-y-2">
+                                                        <div>
+                                                            <label className="text-xs text-gray-600">Размер (%)</label>
+                                                            <input type="range" min="10" max="100" value={(currentSlide.images?.find(i => i.id === selectedElement)?.width || 30)} onChange={(e) => updateElementProperty(selectedElement, 'width', parseInt(e.target.value))} className="w-full" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-xs text-gray-600">Поворот (°)</label>
+                                                            <input type="range" min="0" max="360" value={(currentSlide.images?.find(i => i.id === selectedElement)?.rotation || 0)} onChange={(e) => updateElementProperty(selectedElement, 'rotation', parseInt(e.target.value))} className="w-full" />
+                                                        </div>
+                                                        <button onClick={deleteSelectedElement} className="w-full bg-red-600 text-white py-1 px-3 rounded text-sm hover:bg-red-700">
+                                                            Удалить элемент
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-4 rounded-lg border border-blue-100">
+                                        <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                                            📏 Размеры шрифтов
+                                        </h3>
+                                        
+                                        <div className="space-y-4">
+                                            <div>
+                                                <FontSizeSlider
+                                                    label="Размер заголовка"
+                                                    value={currentSlide.titleFontSize || 130}
+                                                    onChange={(value) => {
+                                                        updateCurrentSlide('titleFontSize', value);
+                                                        markSettingChanged('titleFontSize');
+                                                    }}
+                                                    min={40}
+                                                    max={150}
+                                                />
+                                                <ApplyButtons
+                                                    settingKey="titleFontSize"
+                                                    settingName="размер заголовка"
+                                                    onApplyCurrent={() => {}}
+                                                    onApplyAll={() => applyToCurrentAndFollowing({ titleFontSize: currentSlide.titleFontSize })}
+                                                />
+                                            </div>
+                                            
+                                            <div>
+                                                <FontSizeSlider
+                                                    label="Размер основного текста"
+                                                    value={currentSlide.mainFontSize || 75}
+                                                    onChange={(value) => {
+                                                        updateCurrentSlide('mainFontSize', value);
+                                                        markSettingChanged('mainFontSize');
+                                                    }}
+                                                    min={16}
+                                                    max={150}
+                                                />
+                                                <ApplyButtons
+                                                    settingKey="mainFontSize"
+                                                    settingName="размер основного текста"
+                                                    onApplyCurrent={() => {}}
+                                                    onApplyAll={() => applyToCurrentAndFollowing({ mainFontSize: currentSlide.mainFontSize })}
+                                                />
+                                            </div>
+                                            
+                                            <div>
+                                                <FontSizeSlider
+                                                    label="Размер акцентного текста"
+                                                    value={currentSlide.accentFontSize || 70}
+                                                    onChange={(value) => {
+                                                        updateCurrentSlide('accentFontSize', value);
+                                                        markSettingChanged('accentFontSize');
+                                                    }}
+                                                    min={24}
+                                                    max={150}
+                                                />
+                                                <ApplyButtons
+                                                    settingKey="accentFontSize"
+                                                    settingName="размер акцентного текста"
+                                                    onApplyCurrent={() => {}}
+                                                    onApplyAll={() => applyToCurrentAndFollowing({ accentFontSize: currentSlide.accentFontSize })}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-gray-50 rounded-lg border border-gray-200">
+                                        <button
+                                            onClick={() => setIsStyleSectionOpen(!isStyleSectionOpen)}
+                                            className="w-full p-4 flex items-center justify-between hover:bg-gray-100 transition-colors rounded-lg"
+                                        >
+                                            <h3 className="font-semibold text-gray-700 flex items-center gap-2">
+                                                🎨 Оформление
+                                            </h3>
+                                            <span className="text-2xl">{isStyleSectionOpen ? '▲' : '▼'}</span>
+                                        </button>
+                                        
+                                        {isStyleSectionOpen && (
+                                            <div className="p-4 pt-0">
+                                                <div className="space-y-3">
+                                                    <div>
+                                                        <label className="block text-sm font-medium text-gray-600 mb-1">
+                                                            Тип фона
+                                                        </label>
+                                                        <select
+                                                            value={currentSlide.bgType || 'solid'}
+                                                            onChange={(e) => {
+                                                                updateCurrentSlide('bgType', e.target.value);
+                                                                markSettingChanged('bgType');
+                                                            }}
+                                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+                                                        >
+                                                            <option value="solid">Однотонный</option>
+                                                            <option value="gradient">Градиент</option>
+                                                            <option value="image">Изображение</option>
+                                                        </select>
+                                                        <ApplyButtons
+                                                            settingKey="bgType"
+                                                            settingName="тип фона"
+                                                            onApplyCurrent={() => {}}
+                                                            onApplyAll={() => applyToCurrentAndFollowing({ bgType: currentSlide.bgType })}
+                                                        />
+                                                    </div>
+                                                    
+                                                    {(currentSlide.bgType || 'solid') === 'image' ? (
+                                                        <div>
+                                                            <label className="block text-sm font-medium text-gray-600 mb-2">
+                                                                Фоновое изображение
+                                                            </label>
+                                                            {currentSlide.bgImage ? (
+                                                                <div className="space-y-2">
+                                                                    <div className="relative w-full h-32 rounded-lg overflow-hidden border-2 border-gray-300">
+                                                                        <img 
+                                                                            src={currentSlide.bgImage} 
+                                                                            alt="Фон" 
+                                                                            className="w-full h-full object-cover"
+                                                                        />
+                                                                    </div>
+                                                                    <div className="flex gap-2">
+                                                                        <button
+                                                                            onClick={() => removeBackgroundImage('current')}
+                                                                            className="flex-1 px-3 py-2 bg-red-50 text-red-600 rounded-md hover:bg-red-100 transition-colors text-sm font-medium"
+                                                                        >
+                                                                            Удалить (этот слайд)
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => removeBackgroundImage('all')}
+                                                                            className="flex-1 px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium"
+                                                                        >
+                                                                            Удалить (все следующие)
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            ) : (
+                                                                <label className="block">
+                                                                    <input
+                                                                        type="file"
+                                                                        accept="image/*"
+                                                                        onChange={(e) => handleImageUpload(e, 'ask')}
+                                                                        className="hidden"
+                                                                    />
+                                                                    <div className="w-full px-4 py-8 border-2 border-dashed border-blue-300 rounded-lg cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-colors text-center">
+                                                                        <p className="text-lg font-semibold text-blue-600 mb-1">📸 Загрузить изображение</p>
+                                                                        <p className="text-xs text-gray-500">Выбор применения появится после загрузки</p>
+                                                                    </div>
+                                                                </label>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="space-y-3">
+                                                            <div>
+                                                                <label className="block text-sm font-medium text-gray-600 mb-2">
+                                                                    {(currentSlide.bgType || 'solid') === 'solid' ? 'Цвет фона' : 'Цвет фона 1'}
+                                                                </label>
+                                                                <div className="flex gap-2">
+                                                                    <input
+                                                                        type="color"
+                                                                        value={currentSlide.bgColor1 || '#1e40af'}
+                                                                        onChange={(e) => {
+                                                                            updateCurrentSlide('bgColor1', e.target.value);
+                                                                            markSettingChanged('bgColor1');
+                                                                        }}
+                                                                        className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
+                                                                    />
+                                                                    <input
+                                                                        type="text"
+                                                                        value={currentSlide.bgColor1 || '#1e40af'}
+                                                                        onChange={(e) => {
+                                                                            updateCurrentSlide('bgColor1', e.target.value);
+                                                                            markSettingChanged('bgColor1');
+                                                                        }}
+                                                                        className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+                                                                    />
+                                                                </div>
+                                                                <ApplyButtons
+                                                                    settingKey="bgColor1"
+                                                                    settingName="цвет фона"
+                                                                    onApplyCurrent={() => {}}
+                                                                    onApplyAll={() => applyToCurrentAndFollowing({ bgColor1: currentSlide.bgColor1 })}
+                                                                />
+                                                            </div>
+                                                            
+                                                            <div>
+                                                                <label className="block text-sm font-medium text-gray-600 mb-2">
+                                                                    Цвет текста
+                                                                </label>
+                                                                <div className="flex gap-2">
+                                                                    <input
+                                                                        type="color"
+                                                                        value={currentSlide.textColor || '#ffffff'}
+                                                                        onChange={(e) => {
+                                                                            updateCurrentSlide('textColor', e.target.value);
+                                                                            markSettingChanged('textColor');
+                                                                        }}
+                                                                        className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
+                                                                    />
+                                                                    <input
+                                                                        type="text"
+                                                                        value={currentSlide.textColor || '#ffffff'}
+                                                                        onChange={(e) => {
+                                                                            updateCurrentSlide('textColor', e.target.value);
+                                                                            markSettingChanged('textColor');
+                                                                        }}
+                                                                        className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+                                                                    />
+                                                                </div>
+                                                                <ApplyButtons
+                                                                    settingKey="textColor"
+                                                                    settingName="цвет текста"
+                                                                    onApplyCurrent={() => {}}
+                                                                    onApplyAll={() => applyToCurrentAndFollowing({ textColor: currentSlide.textColor })}
+                                                                />
+                                                            </div>
+                                                            
+                                                            {(currentSlide.bgType || 'solid') === 'gradient' && (
+                                                                <div>
+                                                                    <label className="block text-sm font-medium text-gray-600 mb-2">
+                                                                        Цвет фона 2
+                                                                    </label>
+                                                                    <div className="flex gap-2">
+                                                                        <input
+                                                                            type="color"
+                                                                            value={currentSlide.bgColor2 || '#7c3aed'}
+                                                                            onChange={(e) => {
+                                                                                updateCurrentSlide('bgColor2', e.target.value);
+                                                                                markSettingChanged('bgColor2');
+                                                                            }}
+                                                                            className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
+                                                                        />
+                                                                        <input
+                                                                            type="text"
+                                                                            value={currentSlide.bgColor2 || '#7c3aed'}
+                                                                            onChange={(e) => {
+                                                                                updateCurrentSlide('bgColor2', e.target.value);
+                                                                                markSettingChanged('bgColor2');
+                                                                            }}
+                                                                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+                                                                        />
+                                                                    </div>
+                                                                    <ApplyButtons
+                                                                        settingKey="bgColor2"
+                                                                        settingName="второй цвет фона"
+                                                                        onApplyCurrent={() => {}}
+                                                                        onApplyAll={() => applyToCurrentAndFollowing({ bgColor2: currentSlide.bgColor2 })}
+                                                                    />
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    
+                                                    <div className="space-y-3 mt-4 pt-4 border-t border-gray-200">
+                                                        <div>
+                                                            <label className="block text-sm font-medium text-gray-600 mb-2">
+                                                                Цвет акцентной подложки
+                                                            </label>
+                                                            <div className="flex gap-2">
+                                                                <input
+                                                                    type="color"
+                                                                    value={currentSlide.accentBgColor || '#fbbf24'}
+                                                                    onChange={(e) => {
+                                                                        updateCurrentSlide('accentBgColor', e.target.value);
+                                                                        markSettingChanged('accentBgColor');
+                                                                    }}
+                                                                    className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
+                                                                />
+                                                                <input
+                                                                    type="text"
+                                                                    value={currentSlide.accentBgColor || '#fbbf24'}
+                                                                    onChange={(e) => {
+                                                                        updateCurrentSlide('accentBgColor', e.target.value);
+                                                                        markSettingChanged('accentBgColor');
+                                                                    }}
+                                                                    className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+                                                                />
+                                                            </div>
+                                                            <ApplyButtons
+                                                                settingKey="accentBgColor"
+                                                                settingName="цвет акцентной подложки"
+                                                                onApplyCurrent={() => {}}
+                                                                onApplyAll={() => applyToCurrentAndFollowing({ accentBgColor: currentSlide.accentBgColor })}
+                                                            />
+                                                        </div>
+                                                        
+                                                        <div>
+                                                            <label className="block text-sm font-medium text-gray-600 mb-2">
+                                                                Цвет текста на акценте
+                                                            </label>
+                                                            <div className="flex gap-2">
+                                                                <input
+                                                                    type="color"
+                                                                    value={currentSlide.accentTextColor || '#000000'}
+                                                                    onChange={(e) => {
+                                                                        updateCurrentSlide('accentTextColor', e.target.value);
+                                                                        markSettingChanged('accentTextColor');
+                                                                    }}
+                                                                    className="h-10 w-20 rounded border border-gray-300 cursor-pointer"
+                                                                />
+                                                                <input
+                                                                    type="text"
+                                                                    value={currentSlide.accentTextColor || '#000000'}
+                                                                    onChange={(e) => {
+                                                                        updateCurrentSlide('accentTextColor', e.target.value);
+                                                                        markSettingChanged('accentTextColor');
+                                                                    }}
+                                                                    className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+                                                                />
+                                                            </div>
+                                                            <ApplyButtons
+                                                                settingKey="accentTextColor"
+                                                                settingName="цвет текста на акценте"
+                                                                onApplyCurrent={() => {}}
+                                                                onApplyAll={() => applyToCurrentAndFollowing({ accentTextColor: currentSlide.accentTextColor })}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div>
+                                                        <label className="block text-sm font-medium text-gray-600 mb-1">
+                                                            Шрифт
+                                                        </label>
+                                                        <select
+                                                            value={currentSlide.fontFamily || 'Inter'}
+                                                            onChange={(e) => {
+                                                                updateCurrentSlide('fontFamily', e.target.value);
+                                                                markSettingChanged('fontFamily');
+                                                            }}
+                                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+                                                        >
+                                                            {fonts.map(font => (
+                                                                <option key={font.name} value={font.name}>
+                                                                    {font.name}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        <ApplyButtons
+                                                            settingKey="fontFamily"
+                                                            settingName="шрифт"
+                                                            onApplyCurrent={() => {}}
+                                                            onApplyAll={() => applyToCurrentAndFollowing({ fontFamily: currentSlide.fontFamily })}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    <div className="space-y-2">
+                                        <button
+                                            onClick={exportCurrentSlide}
+                                            className="w-full bg-blue-600 text-white py-3 px-4 rounded-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 font-medium shadow-md hover:shadow-lg"
+                                        >
+                                            ⬇️ Скачать текущий слайд
+                                        </button>
+                                        
+                                        <button
+                                            onClick={exportAllSlides}
+                                            className="w-full bg-green-600 text-white py-3 px-4 rounded-md hover:bg-green-700 transition-colors flex items-center justify-center gap-2 font-medium shadow-md hover:shadow-lg"
+                                        >
+                                            📦 Скачать все слайды ({slides.length})
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <div className="sticky top-4">
+                                        <label className="block text-sm font-medium text-gray-600 mb-2">
+                                            Предпросмотр слайда {currentSlideIndex + 1}
+                                        </label>
+                                        <div className="bg-gray-200 p-4 rounded-lg">
+                                            <div
+                                                ref={slideRef}
+                                                className={`${getAspectRatioClass()} rounded-lg shadow-xl overflow-hidden relative`}
+                                                style={getSlideBackground()}
+                                            >
+                                                <div className="h-full flex flex-col justify-center p-12 relative z-0">
+                                                    {currentSlide.title && (
+                                                        <h2
+                                                            className={`font-bold mb-6 ${
+                                                                currentSlide.titleAlign === 'left' ? 'self-start text-left' : 'self-center text-center'
+                                                            }`}
+                                                            style={{
+                                                                fontFamily: fonts.find(f => f.name === (currentSlide.fontFamily || 'Inter'))?.value,
+                                                                color: currentSlide.textColor || '#ffffff',
+                                                                fontSize: `${(currentSlide.titleFontSize || 130) * 0.25}px`,
+                                                                whiteSpace: 'pre-wrap'
+                                                            }}
+                                                        >
+                                                            {currentSlide.title}
+                                                        </h2>
+                                                    )}
+                                                    
+                                                    {currentSlide.mainText && (
+                                                        <p
+                                                            className={`mb-6 max-w-2xl ${
+                                                                currentSlide.mainTextAlign === 'left' ? 'self-start text-left' : 'self-center text-center'
+                                                            }`}
+                                                            style={{
+                                                                fontFamily: fonts.find(f => f.name === (currentSlide.fontFamily || 'Inter'))?.value,
+                                                                color: currentSlide.textColor || '#ffffff',
+                                                                opacity: 0.9,
+                                                                fontSize: `${(currentSlide.mainFontSize || 75) * 0.25}px`,
+                                                                whiteSpace: 'pre-wrap'
+                                                            }}
+                                                        >
+                                                            {currentSlide.mainText}
+                                                        </p>
+                                                    )}
+                                                    
+                                                    {currentSlide.accentText && (
+                                                        <div className={`mb-6 ${
+                                                            currentSlide.accentAlign === 'left' ? 'self-start' : 'self-center'
+                                                        }`}>
+                                                            <div className="relative inline-block">
+                                                                <div
+                                                                    className="absolute inset-0 rounded-lg"
+                                                                    style={{
+                                                                        backgroundColor: currentSlide.accentBgColor || '#fbbf24',
+                                                                        margin: `-${(currentSlide.accentFontSize || 70) * 0.15}px -${(currentSlide.accentFontSize || 70) * 0.3}px`
+                                                                    }}
+                                                                />
+                                                                <p
+                                                                    className="relative font-semibold"
+                                                                    style={{
+                                                                        fontFamily: fonts.find(f => f.name === (currentSlide.fontFamily || 'Inter'))?.value,
+                                                                        color: currentSlide.accentTextColor || '#000000',
+                                                                        fontSize: `${(currentSlide.accentFontSize || 70) * 0.25}px`,
+                                                                        padding: `${(currentSlide.accentFontSize || 70) * 0.15}px ${(currentSlide.accentFontSize || 70) * 0.3}px`,
+                                                                        whiteSpace: 'pre-wrap'
+                                                                    }}
+                                                                >
+                                                                    {currentSlide.accentText}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    
+                                                    {currentSlide.secondaryText && (
+                                                        <p
+                                                            className={`max-w-2xl ${
+                                                                currentSlide.secondaryTextAlign === 'left' ? 'self-start text-left' : 'self-center text-center'
+                                                            }`}
+                                                            style={{
+                                                                fontFamily: fonts.find(f => f.name === (currentSlide.fontFamily || 'Inter'))?.value,
+                                                                color: currentSlide.textColor || '#ffffff',
+                                                                opacity: 0.9,
+                                                                fontSize: `${(currentSlide.mainFontSize || 75) * 0.25}px`,
+                                                                whiteSpace: 'pre-wrap'
+                                                            }}
+                                                        >
+                                                            {currentSlide.secondaryText}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                
+                                                {(currentSlide.images || []).map((img) => (
+                                                    <div
+                                                        key={img.id}
+                                                        className={`draggable-el ${selectedElement === img.id ? 'selected' : ''}`}
+                                                        onClick={() => setSelectedElement(img.id)}
+                                                        onMouseDown={(e) => {
+                                                            e.preventDefault();
+                                                            setSelectedElement(img.id);
+                                                            const moveHandler = (moveEvent) => handleImageDrag(moveEvent, img);
+                                                            const upHandler = () => {
+                                                                document.removeEventListener('mousemove', moveHandler);
+                                                                document.removeEventListener('mouseup', upHandler);
+                                                            };
+                                                            document.addEventListener('mousemove', moveHandler);
+                                                            document.addEventListener('mouseup', upHandler);
+                                                        }}
+                                                        style={{
+                                                            left: `${img.x}%`,
+                                                            top: `${img.y}%`,
+                                                            width: `${img.width}%`,
+                                                            height: `${img.height}%`,
+                                                            transform: `rotate(${img.rotation}deg)`,
+                                                            zIndex: selectedElement === img.id ? 10 : 5
+                                                        }}
+                                                    >
+                                                        <img src={img.src} alt="" className="w-full h-full object-cover pointer-events-none" />
+                                                    </div>
+                                                ))}
+                                                
+                                                {(currentSlide.tables || []).map((table) => (
+                                                    <div
+                                                        key={table.id}
+                                                        style={{
+                                                            position: 'absolute',
+                                                            left: `${table.x}%`,
+                                                            top: `${table.y}%`,
+                                                            zIndex: 5,
+                                                            cursor: draggedTable === table.id ? 'grabbing' : 'grab'
+                                                        }}
+                                                    >
+                                                        <div
+                                                            onMouseDown={(e) => {
+                                                                if (e.target.tagName === 'TD') return;
+                                                                e.preventDefault();
+                                                                setDraggedTable(table.id);
+                                                                const moveHandler = (moveEvent) => handleTableDrag(moveEvent, table);
+                                                                const upHandler = () => {
+                                                                    setDraggedTable(null);
+                                                                    document.removeEventListener('mousemove', moveHandler);
+                                                                    document.removeEventListener('mouseup', upHandler);
+                                                                };
+                                                                document.addEventListener('mousemove', moveHandler);
+                                                                document.addEventListener('mouseup', upHandler);
+                                                            }}
+                                                            style={{ position: 'relative', padding: '4px', background: 'rgba(0,0,0,0.1)', borderRadius: '4px' }}
+                                                        >
+                                                            <table className="slide-table" style={{ backgroundColor: 'rgba(255,255,255,0.1)' }}>
+                                                            <tbody>
+                                                                {table.data.map((row, ri) => (
+                                                                    <tr key={ri}>
+                                                                        {row.map((cell, ci) => (
+                                                                            <td
+                                                                                key={ci}
+                                                                                contentEditable
+                                                                                suppressContentEditableWarning
+                                                                                onBlur={(e) => updateTableCell(table.id, ri, ci, e.target.textContent)}
+                                                                                style={{
+                                                                                    color: currentSlide.textColor || '#ffffff',
+                                                                                    fontSize: '12px',
+                                                                                    fontFamily: fonts.find(f => f.name === (currentSlide.fontFamily || 'Inter'))?.value
+                                                                                }}
+                                                                            >
+                                                                                {cell}
+                                                                            </td>
+                                                                        ))}
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                        <button
+                                                            onClick={() => deleteTable(table.id)}
+                                                            className="absolute -top-2 -right-2 bg-red-600 text-white w-6 h-6 rounded-full text-xs hover:bg-red-700 z-10"
+                                                        >
+                                                            ×
+                                                        </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {showTableSelector && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowTableSelector(false)}>
+                        <div className="bg-white rounded-xl shadow-2xl p-8 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+                            <h2 className="text-2xl font-bold text-gray-800 mb-4">Создать таблицу</h2>
+                            <p className="text-gray-600 mb-6">Выберите количество строк и столбцов</p>
+                            
+                            <div className="space-y-4 mb-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Строки: {tableRows}
+                                    </label>
+                                    <div className="grid grid-cols-10 gap-1">
+                                        {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
+                                            <button
+                                                key={n}
+                                                onClick={() => setTableRows(n)}
+                                                className={`h-8 rounded ${tableRows >= n ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-600'} hover:bg-blue-400 transition-colors`}
+                                            >
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Столбцы: {tableCols}
+                                    </label>
+                                    <div className="grid grid-cols-10 gap-1">
+                                        {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
+                                            <button
+                                                key={n}
+                                                onClick={() => setTableCols(n)}
+                                                className={`h-8 rounded ${tableCols >= n ? 'bg-purple-500 text-white' : 'bg-gray-200 text-gray-600'} hover:bg-purple-400 transition-colors`}
+                                            >
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setShowTableSelector(false)}
+                                    className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
+                                >
+                                    Отмена
+                                </button>
+                                <button
+                                    onClick={createTable}
+                                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                                >
+                                    Создать таблицу {tableRows}×{tableCols}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {showBgPreview && bgPreview && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={cancelBackgroundImage}>
+                        <div className="bg-white rounded-xl shadow-2xl p-6 max-w-2xl w-full" onClick={(e) => e.stopPropagation()}>
+                            <h2 className="text-2xl font-bold text-gray-800 mb-4">Предпросмотр фонового изображения</h2>
+                            
+                            <div className="mb-6 rounded-lg overflow-hidden border-2 border-gray-300">
+                                <img src={bgPreview} alt="Превью" className="w-full h-80 object-cover" />
+                            </div>
+                            
+                            <p className="text-gray-600 mb-6 text-center font-medium">
+                                Применить это изображение как фон?
+                            </p>
+                            
+                            <div className="grid grid-cols-3 gap-3">
+                                <button
+                                    onClick={() => applyBackgroundImage('current')}
+                                    className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                                >
+                                    Только этот слайд
+                                </button>
+                                <button
+                                    onClick={() => applyBackgroundImage('all')}
+                                    className="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold"
+                                >
+                                    Этот и следующие
+                                </button>
+                                <button
+                                    onClick={cancelBackgroundImage}
+                                    className="px-4 py-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
+                                >
+                                    Отмена
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            );
+        };
+
+        ReactDOM.render(<PresentationDesigner />, document.getElementById('root'));
+    </script>
+</body>
+</html>
