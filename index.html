@@ -6,16 +6,6 @@
     <title>Дизайнер презентаций</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Roboto:wght@400;700&family=Playfair+Display:wght@400;700&family=Montserrat:wght@400;700&family=Open+Sans:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-        .draggable-el { position: absolute; cursor: move; border: 2px dashed transparent; user-select: none; }
-        .draggable-el:hover { border-color: #3b82f6; }
-        .draggable-el.selected { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3); }
-        .resize-handle { position: absolute; width: 10px; height: 10px; background: #3b82f6; border: 2px solid white; border-radius: 50%; z-index: 10; }
-        .resize-handle.se { bottom: -5px; right: -5px; cursor: se-resize; }
-        .rotate-handle { position: absolute; top: -30px; left: 50%; transform: translateX(-50%); width: 20px; height: 20px; background: #10b981; border: 2px solid white; border-radius: 50%; cursor: grab; z-index: 10; }
-        .slide-table { border-collapse: collapse; }
-        .slide-table td { border: 1px solid rgba(255,255,255,0.3); padding: 8px; min-width: 80px; }
-    </style>
 </head>
 <body>
     <div id="root"></div>
@@ -33,82 +23,20 @@
     <script type="text/babel">
         const { useState, useRef, useEffect } = React;
 
-        const Storage = {
-            saveProject: (projectName, data) => {
-                const key = `presentation_${projectName}`;
-                const lightData = { ...data, slides: data.slides.map(s => ({ ...s, bgImage: null, images: [] })), lastModified: new Date().toISOString() };
-                try { localStorage.setItem(key, JSON.stringify(lightData)); return true; } catch (e) { return false; }
-            },
-            loadProject: (projectName) => { const data = localStorage.getItem(`presentation_${projectName}`); return data ? JSON.parse(data) : null; },
-            deleteProject: (projectName) => { localStorage.removeItem(`presentation_${projectName}`); },
-            getAllProjects: () => {
-                const projects = [];
-                for (let i = 0; i < localStorage.length; i++) {
-                    const key = localStorage.key(i);
-                    if (key && key.startsWith('presentation_')) {
-                        try {
-                            const data = JSON.parse(localStorage.getItem(key));
-                            projects.push({ name: key.replace('presentation_', ''), lastModified: data.lastModified, slideCount: data.slides?.length || 0 });
-                        } catch (e) {}
-                    }
-                }
-                return projects.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
-            },
-            exportToFile: (projectName, data) => {
-                const blob = new Blob([JSON.stringify({ projectName, exportDate: new Date().toISOString(), ...data }, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                const date = new Date();
-                link.download = `${projectName}_${date.getDate()}.${date.getMonth() + 1}.json`;
-                link.href = url;
-                link.click();
-                URL.revokeObjectURL(url);
-            },
-            importFromFile: (file, callback) => {
-                const reader = new FileReader();
-                reader.onload = (e) => { try { callback(JSON.parse(e.target.result)); } catch (error) { alert('Ошибка при чтении файла'); } };
-                reader.readAsText(file);
-            }
-        };
-
         const PresentationDesigner = () => {
-            const [mode, setMode] = useState('dashboard');
+            const [mode, setMode] = useState('import');
             const [slides, setSlides] = useState([]);
             const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
             const [changedSettings, setChangedSettings] = useState({});
             const [isStyleSectionOpen, setIsStyleSectionOpen] = useState(false);
             const [aspectRatio, setAspectRatio] = useState('16:9');
-            const [selectedElement, setSelectedElement] = useState(null);
-            const [projects, setProjects] = useState([]);
-            const [projectName, setProjectName] = useState('');
-            const [tempProjectName, setTempProjectName] = useState('');
-            const [deleteConfirm, setDeleteConfirm] = useState(null);
-            const [showTableSelector, setShowTableSelector] = useState(false);
-            const [tableRows, setTableRows] = useState(3);
-            const [tableCols, setTableCols] = useState(3);
-            const [bgPreview, setBgPreview] = useState(null);
-            const [showBgPreview, setShowBgPreview] = useState(false);
-            const [draggedTable, setDraggedTable] = useState(null);
             
             const slideRef = useRef(null);
             const importTextRef = useRef(null);
-            const fileInputRef = useRef(null);
-            const imageInputRef = useRef(null);
-            const autoSaveTimerRef = useRef(null);
 
             useEffect(() => {
                 setIsStyleSectionOpen(currentSlideIndex < 2);
             }, [mode, currentSlideIndex]);
-
-            useEffect(() => { if (mode === 'dashboard') setProjects(Storage.getAllProjects()); }, [mode]);
-
-            useEffect(() => {
-                if (mode === 'edit' && projectName && slides.length > 0) {
-                    if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current);
-                    autoSaveTimerRef.current = setInterval(() => { Storage.saveProject(projectName, { slides, aspectRatio }); console.log('✅ Автосохранение'); }, 60000);
-                    return () => { if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current); };
-                }
-            }, [mode, projectName, slides, aspectRatio]);
 
             const fonts = [
                 { name: 'Inter', value: 'Inter, sans-serif' },
@@ -212,9 +140,7 @@
                             accentFontSize: 70,
                             accentBgColor: '#fbbf24',
                             textColor: '#ffffff',
-                            accentTextColor: '#000000',
-                            images: [],
-                            tables: []
+                            accentTextColor: '#000000'
                         });
                     }
                 }
@@ -229,88 +155,8 @@
                     setSlides(parsedSlides);
                     setMode('edit');
                     setCurrentSlideIndex(0);
-                    if (projectName) Storage.saveProject(projectName, { slides: parsedSlides, aspectRatio });
                 }
             };
-
-            const createNewProject = () => { if (tempProjectName.trim()) { setProjectName(tempProjectName); setMode('import'); } else alert('Введите название проекта'); };
-            const loadProject = (name) => { const data = Storage.loadProject(name); if (data) { setProjectName(name); setSlides(data.slides || []); setAspectRatio(data.aspectRatio || '16:9'); setMode('edit'); setCurrentSlideIndex(0); } };
-            const deleteProject = (name) => { if (deleteConfirm === name) { Storage.deleteProject(name); setProjects(Storage.getAllProjects()); setDeleteConfirm(null); } else { setDeleteConfirm(name); setTimeout(() => setDeleteConfirm(null), 3000); } };
-            const handleFileImport = (e) => { const file = e.target.files[0]; if (file) Storage.importFromFile(file, (data) => { setProjectName(data.projectName || 'Импортированный проект'); setSlides(data.slides || []); setAspectRatio(data.aspectRatio || '16:9'); setMode('edit'); setCurrentSlideIndex(0); }); };
-            const exportProject = () => { Storage.exportToFile(projectName, { slides, aspectRatio }); };
-
-            const addSlide = () => {
-                const newSlide = { id: String(slides.length + 1), title: '', mainText: '', accentText: '', secondaryText: '', titleAlign: 'left', mainTextAlign: 'left', accentAlign: 'left', secondaryTextAlign: 'left', bgType: currentSlideIndex >= 0 ? slides[currentSlideIndex].bgType : 'solid', bgColor1: currentSlideIndex >= 0 ? slides[currentSlideIndex].bgColor1 : '#1e40af', bgColor2: currentSlideIndex >= 0 ? slides[currentSlideIndex].bgColor2 : '#7c3aed', bgImage: null, fontFamily: currentSlideIndex >= 0 ? slides[currentSlideIndex].fontFamily : 'Inter', titleFontSize: currentSlideIndex >= 0 ? slides[currentSlideIndex].titleFontSize : 130, mainFontSize: currentSlideIndex >= 0 ? slides[currentSlideIndex].mainFontSize : 75, accentFontSize: currentSlideIndex >= 0 ? slides[currentSlideIndex].accentFontSize : 70, accentBgColor: currentSlideIndex >= 0 ? slides[currentSlideIndex].accentBgColor : '#fbbf24', textColor: currentSlideIndex >= 0 ? slides[currentSlideIndex].textColor : '#ffffff', accentTextColor: currentSlideIndex >= 0 ? slides[currentSlideIndex].accentTextColor : '#000000', images: [], tables: [] };
-                const updatedSlides = [...slides]; updatedSlides.splice(currentSlideIndex + 1, 0, newSlide); updatedSlides.forEach((s, i) => s.id = String(i + 1)); setSlides(updatedSlides); setCurrentSlideIndex(currentSlideIndex + 1); if (projectName) Storage.saveProject(projectName, { slides: updatedSlides, aspectRatio });
-            };
-
-            const deleteSlide = () => { if (slides.length <= 1) { alert('Нельзя удалить последний слайд'); return; } if (window.confirm('Вы уверены, что хотите удалить этот слайд?')) { const updatedSlides = slides.filter((_, i) => i !== currentSlideIndex); updatedSlides.forEach((s, i) => s.id = String(i + 1)); setSlides(updatedSlides); setCurrentSlideIndex(Math.max(0, currentSlideIndex - 1)); if (projectName) Storage.saveProject(projectName, { slides: updatedSlides, aspectRatio }); } };
-
-            const handleSlideImageUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (event) => { const newImage = { id: Date.now(), src: event.target.result, x: 10, y: 10, width: 30, height: 30, rotation: 0 }; const updatedSlides = [...slides]; if (!updatedSlides[currentSlideIndex].images) updatedSlides[currentSlideIndex].images = []; updatedSlides[currentSlideIndex].images.push(newImage); setSlides(updatedSlides); }; reader.readAsDataURL(file); } };
-
-            const handleImageDragStart = (e, img) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('imageId', img.id); };
-
-            const handleImageDrag = (e, img) => { 
-                if (e.buttons !== 1) return;
-                e.preventDefault();
-                const slideRect = slideRef.current?.getBoundingClientRect();
-                if (!slideRect) return;
-                
-                const x = ((e.clientX - slideRect.left) / slideRect.width) * 100;
-                const y = ((e.clientY - slideRect.top) / slideRect.height) * 100;
-                
-                const updatedSlides = [...slides];
-                const images = updatedSlides[currentSlideIndex].images || [];
-                const idx = images.findIndex(i => i.id === img.id);
-                
-                if (idx !== -1) {
-                    images[idx].x = Math.max(0, Math.min(100 - images[idx].width, x));
-                    images[idx].y = Math.max(0, Math.min(100 - images[idx].height, y));
-                    setSlides(updatedSlides);
-                }
-            };
-
-            const updateElementProperty = (elementId, property, value) => { const updatedSlides = [...slides]; const images = updatedSlides[currentSlideIndex].images || []; const idx = images.findIndex(img => img.id === elementId); if (idx !== -1) { images[idx][property] = value; setSlides(updatedSlides); } };
-
-            const deleteSelectedElement = () => { if (selectedElement) { const updatedSlides = [...slides]; updatedSlides[currentSlideIndex].images = (updatedSlides[currentSlideIndex].images || []).filter(img => img.id !== selectedElement); setSlides(updatedSlides); setSelectedElement(null); } };
-
-            const addTable = () => { setShowTableSelector(true); };
-
-            const createTable = () => {
-                const newTable = { id: Date.now(), rows: tableRows, cols: tableCols, data: Array(tableRows).fill(null).map(() => Array(tableCols).fill('')), x: 20, y: 30, cellWidth: 100 / tableCols, cellHeight: 8 };
-                const updatedSlides = [...slides]; 
-                if (!updatedSlides[currentSlideIndex].tables) updatedSlides[currentSlideIndex].tables = []; 
-                updatedSlides[currentSlideIndex].tables.push(newTable); 
-                setSlides(updatedSlides);
-                setShowTableSelector(false);
-                setTableRows(3);
-                setTableCols(3);
-            };
-
-            const handleTableDrag = (e, table) => {
-                if (e.buttons !== 1 || !draggedTable) return;
-                e.preventDefault();
-                const slideRect = slideRef.current?.getBoundingClientRect();
-                if (!slideRect) return;
-                
-                const x = ((e.clientX - slideRect.left) / slideRect.width) * 100;
-                const y = ((e.clientY - slideRect.top) / slideRect.height) * 100;
-                
-                const updatedSlides = [...slides];
-                const tables = updatedSlides[currentSlideIndex].tables || [];
-                const idx = tables.findIndex(t => t.id === table.id);
-                
-                if (idx !== -1) {
-                    tables[idx].x = Math.max(0, Math.min(80, x));
-                    tables[idx].y = Math.max(0, Math.min(80, y));
-                    setSlides(updatedSlides);
-                }
-            };
-
-            const updateTableCell = (tableId, row, col, value) => { const updatedSlides = [...slides]; const tables = updatedSlides[currentSlideIndex].tables || []; const idx = tables.findIndex(t => t.id === tableId); if (idx !== -1) { tables[idx].data[row][col] = value; setSlides(updatedSlides); } };
-
-            const deleteTable = (tableId) => { const updatedSlides = [...slides]; updatedSlides[currentSlideIndex].tables = (updatedSlides[currentSlideIndex].tables || []).filter(t => t.id !== tableId); setSlides(updatedSlides); };
-
 
             const updateCurrentSlide = (field, value) => {
                 const updatedSlides = [...slides];
@@ -350,27 +196,18 @@
                 if (file) {
                     const reader = new FileReader();
                     reader.onload = (event) => {
-                        setBgPreview(event.target.result);
-                        setShowBgPreview(applyTo);
+                        const settings = {
+                            bgImage: event.target.result,
+                            bgType: 'image'
+                        };
+                        if (applyTo === 'all') {
+                            applyToCurrentAndFollowing(settings);
+                        } else {
+                            applyToCurrentSlide(settings);
+                        }
                     };
                     reader.readAsDataURL(file);
                 }
-            };
-
-            const applyBackgroundImage = (applyTo) => {
-                const settings = { bgImage: bgPreview, bgType: 'image' };
-                if (applyTo === 'all') {
-                    applyToCurrentAndFollowing(settings);
-                } else {
-                    applyToCurrentSlide(settings);
-                }
-                setShowBgPreview(false);
-                setBgPreview(null);
-            };
-
-            const cancelBackgroundImage = () => {
-                setShowBgPreview(false);
-                setBgPreview(null);
             };
 
             const removeBackgroundImage = (applyTo) => {
@@ -547,93 +384,14 @@
                 }
             };
 
-            if (mode === 'dashboard') {
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-8">
-                        <div className="max-w-6xl mx-auto">
-                            <div className="bg-white rounded-2xl shadow-2xl p-8 mb-8">
-                                <h1 className="text-4xl font-bold text-gray-800 mb-2">🎨 Дизайнер презентаций PRO</h1>
-                                <p className="text-gray-600 mb-6">Управление вашими проектами</p>
-                                <div className="flex gap-4">
-                                    <button onClick={() => setMode('nameProject')} className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white py-4 px-6 rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all font-semibold text-lg shadow-lg">
-                                        ➕ Создать новый проект
-                                    </button>
-                                    <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-gradient-to-r from-green-600 to-teal-600 text-white py-4 px-6 rounded-xl hover:from-green-700 hover:to-teal-700 transition-all font-semibold text-lg shadow-lg">
-                                        📂 Загрузить проект
-                                    </button>
-                                    <input ref={fileInputRef} type="file" accept=".json" onChange={handleFileImport} className="hidden" />
-                                </div>
-                            </div>
-                            {projects.length > 0 ? (
-                                <div className="bg-white rounded-2xl shadow-2xl p-8">
-                                    <h2 className="text-2xl font-bold text-gray-800 mb-6">Ваши проекты</h2>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        {projects.map((project) => (
-                                            <div key={project.name} className="border-2 border-gray-200 rounded-xl p-6 hover:border-blue-500 hover:shadow-lg transition-all">
-                                                <div className="flex justify-between items-start mb-3">
-                                                    <div>
-                                                        <h3 className="text-xl font-bold text-gray-800">{project.name}</h3>
-                                                        <p className="text-sm text-gray-500">{project.slideCount} слайдов • {new Date(project.lastModified).toLocaleString('ru')}</p>
-                                                    </div>
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <button onClick={() => loadProject(project.name)} className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium">
-                                                        Открыть
-                                                    </button>
-                                                    <button onClick={() => deleteProject(project.name)} className={`px-4 py-2 rounded-lg font-medium transition-colors ${deleteConfirm === project.name ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-red-50 hover:text-red-600'}`}>
-                                                        {deleteConfirm === project.name ? 'Точно?' : '🗑️'}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="bg-white rounded-2xl shadow-2xl p-12 text-center">
-                                    <div className="text-6xl mb-4">📋</div>
-                                    <h3 className="text-2xl font-bold text-gray-800 mb-2">Нет сохранённых проектов</h3>
-                                    <p className="text-gray-600">Создайте новый проект или загрузите существующий</p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                );
-            }
-
-            if (mode === 'nameProject') {
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-8 flex items-center justify-center">
-                        <div className="bg-white rounded-2xl shadow-2xl p-12 max-w-2xl w-full">
-                            <h1 className="text-3xl font-bold text-gray-800 mb-2">Название проекта</h1>
-                            <p className="text-gray-600 mb-8">Дайте имя вашей презентации</p>
-                            <input type="text" value={tempProjectName} onChange={(e) => setTempProjectName(e.target.value)} placeholder="КПТ. Модуль 1, урок 1" className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg mb-6" onKeyPress={(e) => e.key === 'Enter' && createNewProject()} />
-                            <div className="flex gap-4">
-                                <button onClick={() => setMode('dashboard')} className="px-6 py-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium">
-                                    ← Назад
-                                </button>
-                                <button onClick={createNewProject} className="flex-1 bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors font-semibold text-lg shadow-lg">
-                                    Продолжить →
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                );
-            }
-
             if (mode === 'import') {
                 return (
                     <div className="min-h-screen bg-gray-50 p-4">
                         <div className="max-w-4xl mx-auto">
                             <div className="bg-white rounded-xl shadow-lg p-8">
-                                <div className="flex justify-between items-center mb-6">
-                                    <div>
-                                        <h1 className="text-3xl font-bold text-gray-800 mb-1">📄 Импорт слайдов</h1>
-                                        <p className="text-sm text-gray-500">Проект: {projectName}</p>
-                                    </div>
-                                    <button onClick={() => setMode('dashboard')} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors">
-                                        ← К проектам
-                                    </button>
-                                </div>
+                                <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+                                    📄 Импорт слайдов
+                                </h1>
                                 <p className="text-gray-600 mb-6">
                                     Вставьте текст презентации. Каждый слайд должен заканчиваться номером.
                                 </p>
@@ -666,20 +424,15 @@
                     <div className="max-w-7xl mx-auto">
                         <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
                             <div className="flex justify-between items-center mb-6">
-                                <div>
-                                    <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                                        📊 {projectName}
-                                    </h1>
-                                    <p className="text-sm text-gray-500">{slides.length} слайдов</p>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button onClick={exportProject} className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium">
-                                        💾 Сохранить
-                                    </button>
-                                    <button onClick={() => { if (projectName) Storage.saveProject(projectName, { slides, aspectRatio }); setMode('dashboard'); }} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors">
-                                        ← К проектам
-                                    </button>
-                                </div>
+                                <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                                    📊 Редактирование слайдов ({slides.length} шт.)
+                                </h1>
+                                <button
+                                    onClick={() => setMode('import')}
+                                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-2"
+                                >
+                                    ← Назад к импорту
+                                </button>
                             </div>
                             
                             <div className="mb-6 bg-gray-50 p-4 rounded-lg">
@@ -687,33 +440,22 @@
                                     <button
                                         onClick={() => setCurrentSlideIndex(Math.max(0, currentSlideIndex - 1))}
                                         disabled={currentSlideIndex === 0}
-                                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                                     >
                                         ◀ Предыдущий
                                     </button>
                                     
-                                    <div className="flex gap-2">
-                                        <button onClick={addSlide} className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium">
-                                            ➕ Добавить слайд
-                                        </button>
-                                        <button onClick={deleteSlide} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors font-medium">
-                                            🗑️ Удалить слайд
-                                        </button>
-                                    </div>
+                                    <span className="text-lg font-semibold text-gray-700">
+                                        Слайд {currentSlideIndex + 1} из {slides.length}
+                                    </span>
                                     
                                     <button
                                         onClick={() => setCurrentSlideIndex(Math.min(slides.length - 1, currentSlideIndex + 1))}
                                         disabled={currentSlideIndex === slides.length - 1}
-                                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                                     >
                                         Следующий ▶
                                     </button>
-                                </div>
-                                
-                                <div className="text-center mb-2">
-                                    <span className="text-lg font-semibold text-gray-700">
-                                        Слайд {currentSlideIndex + 1} из {slides.length}
-                                    </span>
                                 </div>
                                 
                                 <div className="flex gap-2 overflow-x-auto pb-2">
@@ -841,41 +583,6 @@
                                                     placeholder="Текст после акцента"
                                                 />
                                             </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-4 rounded-lg border border-green-100">
-                                        <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                                            🖼️ Изображения и таблицы
-                                        </h3>
-                                        <div className="space-y-3">
-                                            <button onClick={() => imageInputRef.current?.click()} className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium">
-                                                ➕ Добавить изображение
-                                            </button>
-                                            <input ref={imageInputRef} type="file" accept="image/*" onChange={handleSlideImageUpload} className="hidden" />
-                                            
-                                            <button onClick={addTable} className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-colors font-medium">
-                                                ➕ Добавить таблицу
-                                            </button>
-                                            
-                                            {selectedElement && (
-                                                <div className="bg-white p-3 rounded-lg border border-green-300">
-                                                    <p className="text-sm font-semibold text-gray-700 mb-2">Выбранный элемент</p>
-                                                    <div className="space-y-2">
-                                                        <div>
-                                                            <label className="text-xs text-gray-600">Размер (%)</label>
-                                                            <input type="range" min="10" max="100" value={(currentSlide.images?.find(i => i.id === selectedElement)?.width || 30)} onChange={(e) => updateElementProperty(selectedElement, 'width', parseInt(e.target.value))} className="w-full" />
-                                                        </div>
-                                                        <div>
-                                                            <label className="text-xs text-gray-600">Поворот (°)</label>
-                                                            <input type="range" min="0" max="360" value={(currentSlide.images?.find(i => i.id === selectedElement)?.rotation || 0)} onChange={(e) => updateElementProperty(selectedElement, 'rotation', parseInt(e.target.value))} className="w-full" />
-                                                        </div>
-                                                        <button onClick={deleteSelectedElement} className="w-full bg-red-600 text-white py-1 px-3 rounded text-sm hover:bg-red-700">
-                                                            Удалить элемент
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
                                         </div>
                                     </div>
 
@@ -1012,18 +719,30 @@
                                                                     </div>
                                                                 </div>
                                                             ) : (
-                                                                <label className="block">
-                                                                    <input
-                                                                        type="file"
-                                                                        accept="image/*"
-                                                                        onChange={(e) => handleImageUpload(e, 'ask')}
-                                                                        className="hidden"
-                                                                    />
-                                                                    <div className="w-full px-4 py-8 border-2 border-dashed border-blue-300 rounded-lg cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-colors text-center">
-                                                                        <p className="text-lg font-semibold text-blue-600 mb-1">📸 Загрузить изображение</p>
-                                                                        <p className="text-xs text-gray-500">Выбор применения появится после загрузки</p>
-                                                                    </div>
-                                                                </label>
+                                                                <>
+                                                                    <label className="block mb-2">
+                                                                        <input
+                                                                            type="file"
+                                                                            accept="image/*"
+                                                                            onChange={(e) => handleImageUpload(e, 'current')}
+                                                                            className="hidden"
+                                                                        />
+                                                                        <div className="w-full px-4 py-8 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-colors text-center">
+                                                                            <p className="text-sm text-gray-600">⬆️ Загрузить для этого слайда</p>
+                                                                        </div>
+                                                                    </label>
+                                                                    <label className="block">
+                                                                        <input
+                                                                            type="file"
+                                                                            accept="image/*"
+                                                                            onChange={(e) => handleImageUpload(e, 'all')}
+                                                                            className="hidden"
+                                                                        />
+                                                                        <div className="w-full px-4 py-6 border-2 border-dashed border-purple-300 rounded-lg cursor-pointer hover:border-purple-500 hover:bg-purple-50 transition-colors text-center">
+                                                                            <p className="text-sm text-purple-600 font-medium">☁️ Загрузить для всех следующих</p>
+                                                                        </div>
+                                                                    </label>
+                                                                </>
                                                             )}
                                                         </div>
                                                     ) : (
@@ -1249,10 +968,10 @@
                                         <div className="bg-gray-200 p-4 rounded-lg">
                                             <div
                                                 ref={slideRef}
-                                                className={`${getAspectRatioClass()} rounded-lg shadow-xl overflow-hidden relative`}
+                                                className={`${getAspectRatioClass()} rounded-lg shadow-xl overflow-hidden`}
                                                 style={getSlideBackground()}
                                             >
-                                                <div className="h-full flex flex-col justify-center p-12 relative z-0">
+                                                <div className="h-full flex flex-col justify-center p-12">
                                                     {currentSlide.title && (
                                                         <h2
                                                             className={`font-bold mb-6 ${
@@ -1331,95 +1050,6 @@
                                                         </p>
                                                     )}
                                                 </div>
-                                                
-                                                {(currentSlide.images || []).map((img) => (
-                                                    <div
-                                                        key={img.id}
-                                                        className={`draggable-el ${selectedElement === img.id ? 'selected' : ''}`}
-                                                        onClick={() => setSelectedElement(img.id)}
-                                                        onMouseDown={(e) => {
-                                                            e.preventDefault();
-                                                            setSelectedElement(img.id);
-                                                            const moveHandler = (moveEvent) => handleImageDrag(moveEvent, img);
-                                                            const upHandler = () => {
-                                                                document.removeEventListener('mousemove', moveHandler);
-                                                                document.removeEventListener('mouseup', upHandler);
-                                                            };
-                                                            document.addEventListener('mousemove', moveHandler);
-                                                            document.addEventListener('mouseup', upHandler);
-                                                        }}
-                                                        style={{
-                                                            left: `${img.x}%`,
-                                                            top: `${img.y}%`,
-                                                            width: `${img.width}%`,
-                                                            height: `${img.height}%`,
-                                                            transform: `rotate(${img.rotation}deg)`,
-                                                            zIndex: selectedElement === img.id ? 10 : 5
-                                                        }}
-                                                    >
-                                                        <img src={img.src} alt="" className="w-full h-full object-cover pointer-events-none" />
-                                                    </div>
-                                                ))}
-                                                
-                                                {(currentSlide.tables || []).map((table) => (
-                                                    <div
-                                                        key={table.id}
-                                                        style={{
-                                                            position: 'absolute',
-                                                            left: `${table.x}%`,
-                                                            top: `${table.y}%`,
-                                                            zIndex: 5,
-                                                            cursor: draggedTable === table.id ? 'grabbing' : 'grab'
-                                                        }}
-                                                    >
-                                                        <div
-                                                            onMouseDown={(e) => {
-                                                                if (e.target.tagName === 'TD') return;
-                                                                e.preventDefault();
-                                                                setDraggedTable(table.id);
-                                                                const moveHandler = (moveEvent) => handleTableDrag(moveEvent, table);
-                                                                const upHandler = () => {
-                                                                    setDraggedTable(null);
-                                                                    document.removeEventListener('mousemove', moveHandler);
-                                                                    document.removeEventListener('mouseup', upHandler);
-                                                                };
-                                                                document.addEventListener('mousemove', moveHandler);
-                                                                document.addEventListener('mouseup', upHandler);
-                                                            }}
-                                                            style={{ position: 'relative', padding: '4px', background: 'rgba(0,0,0,0.1)', borderRadius: '4px' }}
-                                                        >
-                                                            <table className="slide-table" style={{ backgroundColor: 'rgba(255,255,255,0.1)' }}>
-                                                            <tbody>
-                                                                {table.data.map((row, ri) => (
-                                                                    <tr key={ri}>
-                                                                        {row.map((cell, ci) => (
-                                                                            <td
-                                                                                key={ci}
-                                                                                contentEditable
-                                                                                suppressContentEditableWarning
-                                                                                onBlur={(e) => updateTableCell(table.id, ri, ci, e.target.textContent)}
-                                                                                style={{
-                                                                                    color: currentSlide.textColor || '#ffffff',
-                                                                                    fontSize: '12px',
-                                                                                    fontFamily: fonts.find(f => f.name === (currentSlide.fontFamily || 'Inter'))?.value
-                                                                                }}
-                                                                            >
-                                                                                {cell}
-                                                                            </td>
-                                                                        ))}
-                                                                    </tr>
-                                                                ))}
-                                                            </tbody>
-                                                        </table>
-                                                        <button
-                                                            onClick={() => deleteTable(table.id)}
-                                                            className="absolute -top-2 -right-2 bg-red-600 text-white w-6 h-6 rounded-full text-xs hover:bg-red-700 z-10"
-                                                        >
-                                                            ×
-                                                        </button>
-                                                        </div>
-                                                    </div>
-                                                ))}
                                             </div>
                                         </div>
                                     </div>
@@ -1428,103 +1058,6 @@
                         </div>
                     </div>
                 </div>
-                
-                {showTableSelector && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowTableSelector(false)}>
-                        <div className="bg-white rounded-xl shadow-2xl p-8 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
-                            <h2 className="text-2xl font-bold text-gray-800 mb-4">Создать таблицу</h2>
-                            <p className="text-gray-600 mb-6">Выберите количество строк и столбцов</p>
-                            
-                            <div className="space-y-4 mb-6">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Строки: {tableRows}
-                                    </label>
-                                    <div className="grid grid-cols-10 gap-1">
-                                        {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
-                                            <button
-                                                key={n}
-                                                onClick={() => setTableRows(n)}
-                                                className={`h-8 rounded ${tableRows >= n ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-600'} hover:bg-blue-400 transition-colors`}
-                                            >
-                                                {n}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Столбцы: {tableCols}
-                                    </label>
-                                    <div className="grid grid-cols-10 gap-1">
-                                        {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
-                                            <button
-                                                key={n}
-                                                onClick={() => setTableCols(n)}
-                                                className={`h-8 rounded ${tableCols >= n ? 'bg-purple-500 text-white' : 'bg-gray-200 text-gray-600'} hover:bg-purple-400 transition-colors`}
-                                            >
-                                                {n}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div className="flex gap-3">
-                                <button
-                                    onClick={() => setShowTableSelector(false)}
-                                    className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
-                                >
-                                    Отмена
-                                </button>
-                                <button
-                                    onClick={createTable}
-                                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
-                                >
-                                    Создать таблицу {tableRows}×{tableCols}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-                
-                {showBgPreview && bgPreview && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={cancelBackgroundImage}>
-                        <div className="bg-white rounded-xl shadow-2xl p-6 max-w-2xl w-full" onClick={(e) => e.stopPropagation()}>
-                            <h2 className="text-2xl font-bold text-gray-800 mb-4">Предпросмотр фонового изображения</h2>
-                            
-                            <div className="mb-6 rounded-lg overflow-hidden border-2 border-gray-300">
-                                <img src={bgPreview} alt="Превью" className="w-full h-80 object-cover" />
-                            </div>
-                            
-                            <p className="text-gray-600 mb-6 text-center font-medium">
-                                Применить это изображение как фон?
-                            </p>
-                            
-                            <div className="grid grid-cols-3 gap-3">
-                                <button
-                                    onClick={() => applyBackgroundImage('current')}
-                                    className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
-                                >
-                                    Только этот слайд
-                                </button>
-                                <button
-                                    onClick={() => applyBackgroundImage('all')}
-                                    className="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold"
-                                >
-                                    Этот и следующие
-                                </button>
-                                <button
-                                    onClick={cancelBackgroundImage}
-                                    className="px-4 py-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
-                                >
-                                    Отмена
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
             );
         };
 
