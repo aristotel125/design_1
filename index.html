@@ -1,4 +1,4 @@
-  <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -1335,7 +1335,7 @@ const createSlideObject = (slideData) => {
             const renderFormattedText = (text, style, className = '') => {
                 if (!text) return null;
                 
-                // Разбиваем текст на части, учитывая жирный текст (**текст**) и буллиты
+                // Разбиваем текст на части, учитывая жирный текст (**текст**), курсив (*текст*) и подчёркивание (__текст__)
                 const lines = text.split('\n');
                 
                 return (
@@ -1354,7 +1354,7 @@ const createSlideObject = (slideData) => {
                             if (isBullet) {
                                 // Убираем буллит из начала строки
                                 const bulletText = trimmedLine.substring(2);
-                                const parts = parseBoldText(bulletText);
+                                const parts = parseFormattedText(bulletText);
                                 
                                 return (
                                     <div key={lineIndex} style={{ display: 'flex', marginBottom: '0.3em' }}>
@@ -1364,7 +1364,7 @@ const createSlideObject = (slideData) => {
                                 );
                             } else {
                                 // Обычная строка - сохраняем все пробелы
-                                const parts = parseBoldText(line);
+                                const parts = parseFormattedText(line);
                                 return <div key={lineIndex}>{parts}</div>;
                             }
                         })}
@@ -1372,21 +1372,71 @@ const createSlideObject = (slideData) => {
                 );
             };
             
-            // Функция для парсинга жирного текста
-            const parseBoldText = (text) => {
+            // Функция для парсинга форматированного текста (жирный, курсив, подчёркивание)
+            const parseFormattedText = (text) => {
                 const parts = [];
                 let currentIndex = 0;
-                const boldPattern = /\*\*(.*?)\*\*/g;
+                
+                // Паттерны для разных стилей (порядок важен!)
+                // 1. Жирный + курсив + подчёркивание: __***текст***__
+                // 2. Жирный + курсив: ***текст***
+                // 3. Жирный + подчёркивание: __**текст**__
+                // 4. Курсив + подчёркивание: __*текст*__
+                // 5. Жирный: **текст**
+                // 6. Курсив: *текст*
+                // 7. Подчёркивание: __текст__
+                
+                const combinedPattern = /(__\*\*\*(.*?)\*\*\*__)|(\*\*\*(.*?)\*\*\*)|(__\*\*(.*?)\*\*__)|(__\*(.*?)\*__)|(\*\*(.*?)\*\*)|(?<!\*)(\*((?!\*).+?)\*)(?!\*)|__(.*?)__/g;
+                
                 let match;
                 
-                while ((match = boldPattern.exec(text)) !== null) {
-                    // Добавляем текст до жирного
+                while ((match = combinedPattern.exec(text)) !== null) {
+                    // Добавляем текст до совпадения
                     if (match.index > currentIndex) {
                         parts.push(text.substring(currentIndex, match.index));
                     }
                     
-                    // Добавляем жирный текст
-                    parts.push(<strong key={match.index}>{match[1]}</strong>);
+                    const key = `${match.index}_${currentIndex}`;
+                    
+                    // Определяем тип форматирования
+                    if (match[1]) {
+                        // __***текст***__ - жирный + курсив + подчёркивание
+                        parts.push(
+                            <span key={key} style={{ fontWeight: 'bold', fontStyle: 'italic', textDecoration: 'underline' }}>
+                                {match[2]}
+                            </span>
+                        );
+                    } else if (match[3]) {
+                        // ***текст*** - жирный + курсив
+                        parts.push(
+                            <span key={key} style={{ fontWeight: 'bold', fontStyle: 'italic' }}>
+                                {match[4]}
+                            </span>
+                        );
+                    } else if (match[5]) {
+                        // __**текст**__ - жирный + подчёркивание
+                        parts.push(
+                            <span key={key} style={{ fontWeight: 'bold', textDecoration: 'underline' }}>
+                                {match[6]}
+                            </span>
+                        );
+                    } else if (match[7]) {
+                        // __*текст*__ - курсив + подчёркивание
+                        parts.push(
+                            <span key={key} style={{ fontStyle: 'italic', textDecoration: 'underline' }}>
+                                {match[8]}
+                            </span>
+                        );
+                    } else if (match[9]) {
+                        // **текст** - жирный
+                        parts.push(<strong key={key}>{match[10]}</strong>);
+                    } else if (match[11]) {
+                        // *текст* - курсив (используем группу 12, так как 11 это lookahead)
+                        parts.push(<em key={key}>{match[12]}</em>);
+                    } else if (match[13]) {
+                        // __текст__ - подчёркивание
+                        parts.push(<u key={key}>{match[13]}</u>);
+                    }
                     
                     currentIndex = match.index + match[0].length;
                 }
@@ -1428,7 +1478,7 @@ const createSlideObject = (slideData) => {
                 );
             };
 
-            // Компонент для форматирования текста (жирный и маркированный список)
+            // Компонент для форматирования текста (жирный, курсив, подчёркивание и маркированный список)
             const TextFormattingToolbar = ({ textareaRef, onTextChange }) => {
                 
                 // Обработка горячих клавиш
@@ -1441,6 +1491,18 @@ const createSlideObject = (slideData) => {
                         if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
                             e.preventDefault();
                             applyBold();
+                        }
+                        
+                        // Ctrl+I или Cmd+I для курсива
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'i') {
+                            e.preventDefault();
+                            applyItalic();
+                        }
+                        
+                        // Ctrl+U или Cmd+U для подчёркивания
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'u') {
+                            e.preventDefault();
+                            applyUnderline();
                         }
                     };
                     
@@ -1502,6 +1564,113 @@ const createSlideObject = (slideData) => {
                         textarea.focus();
                         textarea.setSelectionRange(newSelectionStart, newSelectionEnd);
                     }, 0);        
+                };
+                
+                const applyItalic = () => {
+                    if (!textareaRef.current) return;
+                    
+                    const textarea = textareaRef.current;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    const selectedText = textarea.value.substring(start, end);
+                    
+                    if (!selectedText) {
+                        alert('Выделите текст, который хотите сделать курсивом');
+                        return;
+                    }
+                    
+                    const beforeSelection = textarea.value.substring(Math.max(0, start - 1), start);
+                    const afterSelection = textarea.value.substring(end, Math.min(textarea.value.length, end + 1));
+                    
+                    let newText;
+                    let newSelectionStart;
+                    let newSelectionEnd;
+                    
+                    // СЛУЧАЙ 1: Выделенный текст сам содержит * в начале и конце (например: *текст*)
+                    if (selectedText.startsWith('*') && selectedText.endsWith('*') && selectedText.length > 2 && 
+                        !(selectedText.startsWith('**') || selectedText.endsWith('**'))) {
+                        // Убираем * изнутри выделенного текста
+                        const unwrappedText = selectedText.substring(1, selectedText.length - 1);
+                        newText = textarea.value.substring(0, start) + unwrappedText + textarea.value.substring(end);
+                        newSelectionStart = start;
+                        newSelectionEnd = start + unwrappedText.length;
+                    }
+                    // СЛУЧАЙ 2: Текст окружён * снаружи (до и после выделения)
+                    else if (beforeSelection === '*' && afterSelection === '*' && 
+                             textarea.value.substring(Math.max(0, start - 2), start) !== '**' &&
+                             textarea.value.substring(end, Math.min(textarea.value.length, end + 2)) !== '**') {
+                        // Убираем * с обеих сторон
+                        newText = textarea.value.substring(0, start - 1) + selectedText + textarea.value.substring(end + 1);
+                        newSelectionStart = start - 1;
+                        newSelectionEnd = end - 1;
+                    }
+                    // СЛУЧАЙ 3: Текст обычный - делаем курсивом
+                    else {
+                        const italicText = `*${selectedText}*`;
+                        newText = textarea.value.substring(0, start) + italicText + textarea.value.substring(end);
+                        newSelectionStart = start;
+                        newSelectionEnd = start + italicText.length;
+                    }
+                    
+                    onTextChange(newText);
+                    
+                    // Восстанавливаем фокус и выделение
+                    setTimeout(() => {
+                        textarea.focus();
+                        textarea.setSelectionRange(newSelectionStart, newSelectionEnd);
+                    }, 0);
+                };
+                
+                const applyUnderline = () => {
+                    if (!textareaRef.current) return;
+                    
+                    const textarea = textareaRef.current;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    const selectedText = textarea.value.substring(start, end);
+                    
+                    if (!selectedText) {
+                        alert('Выделите текст, который хотите подчеркнуть');
+                        return;
+                    }
+                    
+                    const beforeSelection = textarea.value.substring(Math.max(0, start - 2), start);
+                    const afterSelection = textarea.value.substring(end, Math.min(textarea.value.length, end + 2));
+                    
+                    let newText;
+                    let newSelectionStart;
+                    let newSelectionEnd;
+                    
+                    // СЛУЧАЙ 1: Выделенный текст сам содержит __ в начале и конце (например: __текст__)
+                    if (selectedText.startsWith('__') && selectedText.endsWith('__') && selectedText.length > 4) {
+                        // Убираем __ изнутри выделенного текста
+                        const unwrappedText = selectedText.substring(2, selectedText.length - 2);
+                        newText = textarea.value.substring(0, start) + unwrappedText + textarea.value.substring(end);
+                        newSelectionStart = start;
+                        newSelectionEnd = start + unwrappedText.length;
+                    }
+                    // СЛУЧАЙ 2: Текст окружён __ снаружи (до и после выделения)
+                    else if (beforeSelection === '__' && afterSelection === '__') {
+                        // Убираем __ с обеих сторон
+                        newText = textarea.value.substring(0, start - 2) + selectedText + textarea.value.substring(end + 2);
+                        newSelectionStart = start - 2;
+                        newSelectionEnd = end - 2;
+                    }
+                    // СЛУЧАЙ 3: Текст обычный - делаем подчёркнутым
+                    else {
+                        const underlineText = `__${selectedText}__`;
+                        newText = textarea.value.substring(0, start) + underlineText + textarea.value.substring(end);
+                        newSelectionStart = start;
+                        newSelectionEnd = start + underlineText.length;
+                    }
+                    
+                    onTextChange(newText);
+                    
+                    // Восстанавливаем фокус и выделение
+                    setTimeout(() => {
+                        textarea.focus();
+                        textarea.setSelectionRange(newSelectionStart, newSelectionEnd);
+                    }, 0);
                 };
                 
                 const applyBulletList = () => {
@@ -1580,6 +1749,21 @@ const createSlideObject = (slideData) => {
                             title="Жирный текст (Ctrl/Cmd + B)"
                         >
                             B
+                        </button>
+                        <button
+                            onClick={applyItalic}
+                            className="px-3 py-1 rounded hover:bg-white transition-colors text-gray-700 italic"
+                            title="Курсив (Ctrl/Cmd + I)"
+                        >
+                            I
+                        </button>
+                        <button
+                            onClick={applyUnderline}
+                            className="px-3 py-1 rounded hover:bg-white transition-colors text-gray-700"
+                            style={{ textDecoration: 'underline' }}
+                            title="Подчёркивание (Ctrl/Cmd + U)"
+                        >
+                            U
                         </button>
                         <button
                             onClick={applyBulletList}
@@ -3306,4 +3490,3 @@ const createSlideObject = (slideData) => {
     </script>
 </body>
 </html>
-
